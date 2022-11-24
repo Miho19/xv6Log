@@ -35,60 +35,7 @@ struct device {
 
 struct device devices[MAXDEVICE];
 
-void RAMinit(void) {
-    struct device *d;
-    struct superblock sb;
-    
-    memset(&devices, 0, sizeof devices / sizeof devices[0]);
-    
-    d = &devices[0];
-    d->deviceID = 0;
-    d->size = 1024;
-    
-   
-    
-    d->DB = malloc(d->size * sizeof(*d->DB));
-    
-    if(!d->DB) {
-        printf("Failed to init device 1 memory\n");
-        exit(1);
-    }
-    
-    memset(d->DB, 0, sizeof (*d->DB) * d->size);
-    memset(&sb, 0, sizeof sb);
-    
-    sb.size = d->size;
-    sb.nblocks = 985;
-    sb.ninodes = 200;
-    sb.nlog = 10;
-    
-    memmove(&d->DB[1], &sb, sizeof sb);
-    
-    d = &devices[1];
-    d->deviceID = 1;
-    d->size = 512;
-    
-   
-    
-    d->DB = malloc(d->size * sizeof(*d->DB));
-    
-    if(!d->DB) {
-        printf("Failed to init device 2 memory\n");
-        exit(1);
-    }
-    
-    memset(d->DB, 0, sizeof (*d->DB) * d->size);
-    memset(&sb, 0, sizeof sb);
-    
-    sb.size = d->size;
-    sb.nblocks = 485;
-    sb.ninodes = 120;
-    sb.nlog = 10;
-    
-    memmove(&d->DB[1], &sb, sizeof sb);
-    
-    
-}
+
 
 
 
@@ -126,19 +73,116 @@ struct {
 void usbrw(struct buf *b);
 void brelse(struct buf *b);
 void readsb(uint dev, struct superblock *sb);
+struct buf * bread(uint dev, uint sector);
+void brelse(struct buf *b);
+void bwrite(struct buf *b);
 
-void initlog(void) {
-    struct superblock sb;
-    memset(&sb, 0, sizeof sb);
-    readsb(0, &sb);
-    
+
+void loginit(void) {
     memset(&logmeta, 0, sizeof logmeta/sizeof logmeta[0]);
+}
+
+void initlog(uint dev) {
+    struct logmeta *l;
+    struct superblock sb;
     
+    if(dev > MAXDEVICE) {
+        printf("device %d is not a valid device\n", dev);
+        exit(1);
+    }
+    
+    memset(&sb, 0, sizeof sb);
+    readsb(dev, &sb);
+    
+    l = &logmeta[dev];
+    
+    l->start = sb.size - sb.nlog;
+    l->size = sb.nlog;
+    l->dev = dev;
     
 }
 
+void readhead(uint dev) {
+    struct buf *b;
+    struct logmeta *l;
+    struct logheader *lh;
+    int i;
+    
+    l = &logmeta[dev];
+    
+    b = bread(l->dev, l->start);
+    lh = (struct logheader *) b->buffer;
+    
+    l->lh.n = lh->n;
+    
+    for(i = 0; i < l->lh.n; i++)
+        l->lh.sector[i] = lh->sector[i];
+    
+    brelse(b);
+}
+
+void writehead(uint dev) {
+    struct buf *b;
+    struct logmeta *l;
+    struct logheader *lh;
+    int i;
+    
+    l = &logmeta[dev];
+    
+    b = bread(l->dev, l->start);
+    lh = (struct logheader *) b->buffer;
+    
+    lh->n = l->lh.n;
+    
+    for(i = 0; i < l->lh.n; i++)
+         lh->sector[i] = l->lh.sector[i];
+    
+    bwrite(b);
+    brelse(b);
+}
+
+void recover(uint dev) {
+    readhead(dev);
+    install_trans(dev);
+    logmeta[dev].lh.n = 0;
+    writehead(dev);
+}
 
 
+void install_trans(uint dev) {
+    struct logmeta *l;
+    struct logheader *lh;
+    int i;
+    
+    struct buf *dst;
+    struct buf *src;
+    
+    l = &logmeta[dev];
+    
+    for(i = 0; i < l->lh.n; i++) {
+        
+        src = bread(l->dev, l->start + i + 1);
+        dst = bread(l->dev, l->lh.sector[i]);
+        
+        memmove(dst, src, RAMSIZE);
+        bwrite(dst);
+        brelse(src);
+        brelse(dst);
+        
+    }
+}
+
+void begin() {
+    
+}
+
+void commit() {
+    
+}
+
+void log_write(struct buf *b) {
+    
+}
 
 void binit(void) {
     struct buf *b;
@@ -199,6 +243,9 @@ struct buf* bget(uint dev, uint sector) {
     return 0;
     
 }
+
+
+
 
 struct buf * bread(uint dev, uint sector) {
     struct buf *b;
@@ -321,12 +368,71 @@ void shutdown(void){
 }
 
 
+void RAMinit(void) {
+    struct device *d;
+    struct superblock sb;
+    
+    memset(&devices, 0, sizeof devices / sizeof devices[0]);
+    
+    d = &devices[0];
+    d->deviceID = 0;
+    d->size = 1024;
+    
+   
+    
+    d->DB = malloc(d->size * sizeof(*d->DB));
+    
+    if(!d->DB) {
+        printf("Failed to init device 1 memory\n");
+        exit(1);
+    }
+    
+    memset(d->DB, 0, sizeof (*d->DB) * d->size);
+    memset(&sb, 0, sizeof sb);
+    
+    sb.size = d->size;
+    sb.nblocks = 985;
+    sb.ninodes = 200;
+    sb.nlog = 10;
+    
+    memmove(&d->DB[1], &sb, sizeof sb);
+    
+    d = &devices[1];
+    d->deviceID = 1;
+    d->size = 512;
+    
+   
+    
+    d->DB = malloc(d->size * sizeof(*d->DB));
+    
+    if(!d->DB) {
+        printf("Failed to init device 2 memory\n");
+        exit(1);
+    }
+    
+    memset(d->DB, 0, sizeof (*d->DB) * d->size);
+    memset(&sb, 0, sizeof sb);
+    
+    sb.size = d->size;
+    sb.nblocks = 485;
+    sb.ninodes = 120;
+    sb.nlog = 10;
+    
+    memmove(&d->DB[1], &sb, sizeof sb);
+    
+    
+}
+
+
+
+
 int main() {
     // Write C code here
     
     
     binit();
     RAMinit();
+    loginit();
     
     test();
     shutdown();
