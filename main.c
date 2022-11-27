@@ -381,49 +381,7 @@ void bwrite(struct buf *b) {
 
 
 void test(void){
-    const char message[] = "Hello World!";
     
-    struct buf *b;
-    
-    struct superblock sb;
-    
-    int device;
-    
-    begin();
-    b = bread(0, 46);
-    printf("b->sector %d b->dev %d b->buffer %s\n", b->sector, b->dev, b->buffer);
-    memmove(b->buffer, message, strlen(message) + 1);
-    log_write(b);
-    brelse(b);
-    
-    commit();
-    printf("END OF TRANS\n");
-    
-    
-    
-    
-    begin();
-    device = 0;
-    memset(&sb, 0, sizeof sb);
-    
-    readsb(device, &sb);
-
-  
-    printf("device %d superblock\nsb.size %d\nsb.nblocks %d\nsb.ninodes %d\nsb.nlog %d\n", device, sb.size, sb.nblocks, sb.ninodes, sb.nlog);
-    commit();
- printf("END OF TRANS\n");    
- 
- begin();
-    b = bread(0, 46);
-    printf("b->sector %d b->dev %d b->buffer %s\n", b->sector, b->dev, b->buffer);
-    brelse(b);
-   
-   commit();
-    printf("END OF TRANS\n");
-  
-  
-
-    display();
 }
 
 void readsb(uint dev, struct superblock *sb){
@@ -434,10 +392,7 @@ void readsb(uint dev, struct superblock *sb){
     brelse(b);
 }
 
-void shutdown(void){
-    free(devices[0].DB);
-    free(devices[1].DB);
-}
+
 
 
 void RAMinit(void) {
@@ -498,18 +453,24 @@ void RAMinit(void) {
 }
 
 
-
-
-int main() {
-    // Write C code here
-    
-    
+void initFS(void) {
     binit();
     loginit();
     RAMinit();
     
-    
-    test();
-    shutdown();
+}
+
+void shutdownFS(void) {
+    free(devices[0].DB);
+    free(devices[1].DB);
+}
+
+void shutdown(void){
+    shutdownFS();
+}
+
+
+int main() {
+   
     return 0;
 }
