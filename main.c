@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define NBUF 5
+#define NBUF 10
 #define RAMSIZE 512
 
 #define B_BUSY 1
@@ -60,8 +60,8 @@ struct buf {
     struct buf *next;
     struct buf *prev;
     unsigned char buffer[RAMSIZE];
-    int sector;
-    int dev;
+    uint sector;
+    uint dev;
     int flags;
 };
 
@@ -80,6 +80,7 @@ void bwrite(struct buf *b);
 
 void loginit(void) {
     memset(&logmeta, 0, sizeof logmeta/sizeof logmeta[0]);
+    
 }
 
 void initlog(uint dev) {
@@ -99,6 +100,8 @@ void initlog(uint dev) {
     l->start = sb.size - sb.nlog;
     l->size = sb.nlog;
     l->dev = dev;
+    
+    recover(dev);
     
 }
 
@@ -166,10 +169,12 @@ void install_trans(uint dev) {
         
         memmove(dst, src, RAMSIZE);
         bwrite(dst);
-        brelse(src);
         brelse(dst);
+        brelse(src);
         
     }
+    
+   
 }
 
 void begin() {
@@ -177,11 +182,52 @@ void begin() {
 }
 
 void commit() {
+    int i;
+    struct logmeta *l;
+    
+    //printf("device 1: %d device 2: %d\n", logmeta[0].lh.n, logmeta[1].lh.n);
+   
+    for(i = 0; i < MAXDEVICE; i++) {
+        l = &logmeta[i];
+        if(l->lh.n > 0) {
+            writehead(i);
+            install_trans(i);
+            l->lh.n = 0;
+            writehead(i);
+        }
+    }
     
 }
 
 void log_write(struct buf *b) {
+    int i;
+    struct logmeta *l;
+    struct buf *logbuf;
     
+    l = &logmeta[b->dev];
+    
+    if(l->lh.n >= l->size) {
+        printf("Transaction size too big\n");
+        exit(1);
+    }
+    
+    for(i = 0; i < l->lh.n; i++) {
+        if(l->lh.sector[i] == b->sector) {
+            break;
+        }
+    }
+    
+    l->lh.sector[i] = b->sector;
+    
+    logbuf = bread(b->dev, l->start+i+1);
+    memmove(logbuf->buffer, b->buffer, RAMSIZE);
+    bwrite(logbuf);
+    brelse(logbuf);
+    
+    if(i == l->lh.n)
+        l->lh.n++;
+        
+    b->flags |= B_DIRTY;
 }
 
 void binit(void) {
@@ -212,15 +258,20 @@ void display(void) {
     int i;
     
     for(i=1, b = bcache.head.next; b != &bcache.head; b = b->next, i++) {
-        printf("%d | dev: %d | sector %d | buffer %d \n", i, b->dev, b->sector, b->buffer);
+        printf("%d | dev: %d | sector %d |\n", i, b->dev, b->sector);
     }
 }
 
+
 struct buf* bget(uint dev, uint sector) {
     struct buf *b;
-    
+    int i;
+    //printf("%d | b->dev %d b->sector %d\n", i, b->dev, b->sector);
+    //printf("bget: dev: %d sector %d\n", dev, sector);
     loop:
-    for(b = bcache.head.next; b != &bcache.head; b = b->next) {
+   
+    for(b = bcache.head.next, i = 1; b != &bcache.head; b = b->next, i++) {
+        
         if(b->dev == dev && b->sector == sector) {
             
             if(!(b->flags & B_BUSY)) {
@@ -231,9 +282,11 @@ struct buf* bget(uint dev, uint sector) {
             goto loop;               
         }
     }
+    
 
     for(b = bcache.head.prev; b != &bcache.head; b = b->prev) {
         if(!(b->flags & B_BUSY) && !(b->flags & B_DIRTY)) {
+            
             b->dev = dev;
             b->sector = sector;
             b->flags = B_BUSY;
@@ -251,7 +304,7 @@ struct buf * bread(uint dev, uint sector) {
     struct buf *b;
     
     b = bget(dev, sector);
-   
+    
     
     if(!(b->flags & B_VALID)) {
         usbrw(b);        
@@ -269,6 +322,7 @@ void brelse(struct buf *b) {
     
     b->next->prev = b->prev;
     b->prev->next = b->next;
+
     
     b->next = bcache.head.next;
     b->prev = &bcache.head;
@@ -333,30 +387,48 @@ void test(void){
     
     struct superblock sb;
     
+    int device;
+    
+    begin();
     b = bread(0, 46);
     printf("b->sector %d b->dev %d b->buffer %s\n", b->sector, b->dev, b->buffer);
     memmove(b->buffer, message, strlen(message) + 1);
-    bwrite(b);
+    log_write(b);
     brelse(b);
     
+    commit();
+    printf("END OF TRANS\n");
+    
+    
+    
+    
+    begin();
+    device = 0;
+    memset(&sb, 0, sizeof sb);
+    
+    readsb(device, &sb);
+
+  
+    printf("device %d superblock\nsb.size %d\nsb.nblocks %d\nsb.ninodes %d\nsb.nlog %d\n", device, sb.size, sb.nblocks, sb.ninodes, sb.nlog);
+    commit();
+ printf("END OF TRANS\n");    
+ 
+ begin();
     b = bread(0, 46);
     printf("b->sector %d b->dev %d b->buffer %s\n", b->sector, b->dev, b->buffer);
     brelse(b);
-    
-    
-    memset(&sb, 0, sizeof sb);
-    readsb(1, &sb);
-    
-    printf("superblock\nsb.size %d\nsb.nblocks %d\nsb.ninodes %d\nsb.nlog %d\n", sb.size, sb.nblocks, sb.ninodes, sb.nlog);
-    
-    
+   
+   commit();
+    printf("END OF TRANS\n");
+  
+  
+
+    display();
 }
 
 void readsb(uint dev, struct superblock *sb){
     struct buf *b;
-    
     b = bread(dev, 1);
-    
     memmove(sb, b->buffer, sizeof(*sb));
     
     brelse(b);
@@ -397,6 +469,8 @@ void RAMinit(void) {
     
     memmove(&d->DB[1], &sb, sizeof sb);
     
+    initlog(0);
+    
     d = &devices[1];
     d->deviceID = 1;
     d->size = 512;
@@ -419,7 +493,7 @@ void RAMinit(void) {
     sb.nlog = 10;
     
     memmove(&d->DB[1], &sb, sizeof sb);
-    
+    initlog(1);
     
 }
 
@@ -431,8 +505,9 @@ int main() {
     
     
     binit();
-    RAMinit();
     loginit();
+    RAMinit();
+    
     
     test();
     shutdown();
