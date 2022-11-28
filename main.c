@@ -453,6 +453,149 @@ void RAMinit(void) {
 }
 
 
+
+
+
+struct node {
+    char name[DIRSIZ];    
+};
+
+struct htable {
+    uint capacity;
+    uint nkeys;
+    struct node nodes[NBUF];
+};
+
+
+static uint htable_step(struct htable *t, uint key) {
+    return 1 + (key % (t->capacity -1));
+}
+
+static uint htable_word_to_int(const char *word) {
+    uint result;
+    
+    result = 0;
+    
+    while(*word != '\0'){
+        result = (*word + 31 * result);
+        word++;
+    }
+    return result;
+}
+
+
+void htabledisplay(struct htable *t) {
+    int i;
+    
+    struct node *n;
+   
+    for(i = 0; i < t->capacity; i++) {
+        
+        n = &t->nodes[i];
+        
+        if(strlen(n->name) == 0)
+            continue;
+        printf("| %d |\t%s\n", i, n->name);
+    }
+}
+
+struct node* htablesearch(struct htable *t, const char *key) {
+    uint hash;
+    uint index;
+    uint collisions;
+    uint step;
+    
+    struct node *n;
+    
+    hash = htable_word_to_int(key);
+    index = (hash % t->capacity);
+    
+    
+    n = &t->nodes[index];
+    step = htable_step(t, index);
+    collisions = 0;
+    
+    while(strncmp(n->name, key, DIRSIZ) != 0) {
+       
+        collisions++;
+        index = (index + step) % t->capacity;
+        if(collisions == t->capacity) break;
+        
+        n = &t->nodes[index];
+        
+    }
+   
+     
+    if(collisions == t->capacity) n = 0;
+    
+      //printf("index %d/%d collisions: %d n->name %s key %s\n", index, t->capacity, collisions,n->name, key);
+      
+    return n;
+}
+
+uint htableinsert(struct htable *t, const char *key) {
+    uint hash;
+    uint index;
+    
+    uint collisions;
+    uint step;
+    
+    struct node *n;
+    
+    hash = htable_word_to_int(key);
+    index = (hash % t->capacity);
+    
+    n = &t->nodes[index];
+    collisions = 0;
+    step = htable_step(t, index);
+    
+    while(strlen(n->name) != 0) {
+        
+        if(strncmp(n->name, key, DIRSIZ) == 0)
+            return 1;
+        
+        index = (index + step) % t->capacity;
+        n = &t->nodes[index];
+        collisions++;
+        if(collisions == t->capacity) break;
+    }
+    
+    
+    if(collisions == t->capacity) {
+        return 0;
+    }
+    
+   
+    strncpy(n->name, key, DIRSIZ);
+    t->nkeys++;
+    return 1;
+    
+}
+
+
+uint htableremove(struct htable *t, const char *key) {
+    struct node *n;
+    
+    n = htablesearch(t, key);
+    
+    if(!n) return 0;
+    
+    strncpy(n->name, "", DIRSIZ);
+    
+    return 1;
+}
+
+
+void initbcache() {
+    memset(&bcachetable, 0, sizeof(struct htable));
+    bcachetable.capacity = NBUF;
+    
+}
+
+struct htable bcachetable;
+
+
+
 void initFS(void) {
     binit();
     loginit();
@@ -468,7 +611,6 @@ void shutdownFS(void) {
 void shutdown(void){
     shutdownFS();
 }
-
 
 int main() {
    
