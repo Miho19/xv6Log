@@ -3,8 +3,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define NBUF 10
+#define NBUF 16
 #define RAMSIZE 512
+#define DIRSIZ 14
 
 #define B_BUSY 1
 #define B_DIRTY 4
@@ -34,9 +35,6 @@ struct device {
 };
 
 struct device devices[MAXDEVICE];
-
-
-
 
 
 struct logheader {
@@ -70,12 +68,34 @@ struct {
     struct buf head;
 } bcache;
 
+
+struct node {
+    char name[DIRSIZ];
+    uint dev;
+    void *ptr;
+};
+
+struct htable {
+    uint capacity;
+    uint nkeys;
+    struct node nodes[NBUF];
+};
+
+struct htable bcachehtable;
+
+
 void usbrw(struct buf *b);
 void brelse(struct buf *b);
 void readsb(uint dev, struct superblock *sb);
 struct buf * bread(uint dev, uint sector);
 void brelse(struct buf *b);
 void bwrite(struct buf *b);
+
+uint htableremove(struct htable *t, uint key, uint dev);
+uint htableinsert(struct htable *t, uint sector, uint dev);
+struct node* htablesearch(struct htable *t, uint sector, uint dev);
+
+
 
 
 void loginit(void) {
@@ -251,6 +271,10 @@ void binit(void) {
         b->sector = -1;
         memset(b->buffer, 0, sizeof b->buffer/sizeof b->buffer[0]);
     }
+    
+    memset(&bcachehtable, 0, sizeof(struct htable));
+    bcachehtable.capacity = NBUF;
+    
 }
 
 void display(void) {
@@ -265,31 +289,50 @@ void display(void) {
 
 struct buf* bget(uint dev, uint sector) {
     struct buf *b;
-    int i;
+    struct node *n;
     //printf("%d | b->dev %d b->sector %d\n", i, b->dev, b->sector);
     //printf("bget: dev: %d sector %d\n", dev, sector);
+    n = 0;
     loop:
-   
-    for(b = bcache.head.next, i = 1; b != &bcache.head; b = b->next, i++) {
+    n = htablesearch(&bcachehtable, sector, dev);
+    if(n) {
+        b = (struct buf *)n->ptr;
         
-        if(b->dev == dev && b->sector == sector) {
-            
-            if(!(b->flags & B_BUSY)) {
-                b->flags |= B_BUSY;
-                return b;
-            }
-            
-            goto loop;               
+        if(!(b->flags & B_BUSY)) {
+            b->flags |= B_BUSY;
+            return b;
         }
+        
+        goto loop;
     }
-    
 
+    
     for(b = bcache.head.prev; b != &bcache.head; b = b->prev) {
         if(!(b->flags & B_BUSY) && !(b->flags & B_DIRTY)) {
             
+            if(!htableremove(&bcachehtable, b->sector, b->dev)) {
+                if(!(b->sector == -1 && b->dev == -1)) {
+                     printf("bget removing htable\n");
+                     exit(1);
+                }
+            }
+        
+            if(!htableinsert(&bcachehtable, sector, dev)){
+                printf("bget adding to htable\n");
+                exit(1);
+            }
+            
+            n = htablesearch(&bcachehtable, sector, dev);
+            
+            if(!n) {
+                printf("bget searching error\n");
+                exit(1);
+            }
+            n->ptr = b;
             b->dev = dev;
             b->sector = sector;
             b->flags = B_BUSY;
+            
             return b;
         }             
     }    
@@ -380,9 +423,6 @@ void bwrite(struct buf *b) {
 }
 
 
-void test(void){
-    
-}
 
 void readsb(uint dev, struct superblock *sb){
     struct buf *b;
@@ -454,19 +494,6 @@ void RAMinit(void) {
 
 
 
-
-
-struct node {
-    char name[DIRSIZ];    
-};
-
-struct htable {
-    uint capacity;
-    uint nkeys;
-    struct node nodes[NBUF];
-};
-
-
 static uint htable_step(struct htable *t, uint key) {
     return 1 + (key % (t->capacity -1));
 }
@@ -484,7 +511,11 @@ static uint htable_word_to_int(const char *word) {
 }
 
 
-void htabledisplay(struct htable *t) {
+void printbuf(int index, struct buf *b) {
+    printf("| %d | dev: %d sector %d\n", index, b->dev, b->sector);
+}
+
+void htabledisplay(struct htable *t, void(*printfunc)(int, struct buf *)) {
     int i;
     
     struct node *n;
@@ -495,11 +526,13 @@ void htabledisplay(struct htable *t) {
         
         if(strlen(n->name) == 0)
             continue;
-        printf("| %d |\t%s\n", i, n->name);
+        printfunc(i, (struct buf *)n->ptr);
     }
 }
 
-struct node* htablesearch(struct htable *t, const char *key) {
+
+
+struct node* htablesearch(struct htable *t, uint sector, uint dev) {
     uint hash;
     uint index;
     uint collisions;
@@ -507,25 +540,36 @@ struct node* htablesearch(struct htable *t, const char *key) {
     
     struct node *n;
     
-    hash = htable_word_to_int(key);
+    char name[DIRSIZ];
+    memset(&name, 0, DIRSIZ);
+    snprintf(name, DIRSIZ, "dev%dsector%d", dev, sector);
+    
+    hash = htable_word_to_int(name);
     index = (hash % t->capacity);
     
+   
     
     n = &t->nodes[index];
     step = htable_step(t, index);
     collisions = 0;
     
-    while(strncmp(n->name, key, DIRSIZ) != 0) {
+    while(1) {
+       
+       
+       if((strncmp(n->name, name, DIRSIZ) == 0) && (n->dev == dev)) {
+           break;
+       }
        
         collisions++;
-        index = (index + step) % t->capacity;
+        index = (index + step) % (t->capacity);
         if(collisions == t->capacity) break;
         
         n = &t->nodes[index];
         
     }
-   
+    
      
+   
     if(collisions == t->capacity) n = 0;
     
       //printf("index %d/%d collisions: %d n->name %s key %s\n", index, t->capacity, collisions,n->name, key);
@@ -533,7 +577,9 @@ struct node* htablesearch(struct htable *t, const char *key) {
     return n;
 }
 
-uint htableinsert(struct htable *t, const char *key) {
+
+
+uint htableinsert(struct htable *t, uint sector, uint dev) {
     uint hash;
     uint index;
     
@@ -542,7 +588,11 @@ uint htableinsert(struct htable *t, const char *key) {
     
     struct node *n;
     
-    hash = htable_word_to_int(key);
+    char name[DIRSIZ];
+    memset(&name, 0, DIRSIZ);
+    snprintf(name, DIRSIZ, "dev%dsector%d", dev, sector);
+    
+    hash = htable_word_to_int(name);
     index = (hash % t->capacity);
     
     n = &t->nodes[index];
@@ -551,7 +601,7 @@ uint htableinsert(struct htable *t, const char *key) {
     
     while(strlen(n->name) != 0) {
         
-        if(strncmp(n->name, key, DIRSIZ) == 0)
+        if(strncmp(n->name, name, DIRSIZ) == 0 && n->dev == dev)
             return 1;
         
         index = (index + step) % t->capacity;
@@ -560,39 +610,31 @@ uint htableinsert(struct htable *t, const char *key) {
         if(collisions == t->capacity) break;
     }
     
-    
     if(collisions == t->capacity) {
         return 0;
     }
     
-   
-    strncpy(n->name, key, DIRSIZ);
+    strncpy(n->name, name, DIRSIZ);
+    n->dev = dev;
     t->nkeys++;
     return 1;
     
 }
 
 
-uint htableremove(struct htable *t, const char *key) {
+
+uint htableremove(struct htable *t, uint key, uint dev) {
     struct node *n;
     
-    n = htablesearch(t, key);
+    n = htablesearch(t, key, dev);
     
     if(!n) return 0;
     
     strncpy(n->name, "", DIRSIZ);
-    
+    n->ptr = 0;
+
     return 1;
 }
-
-
-void initbcache() {
-    memset(&bcachetable, 0, sizeof(struct htable));
-    bcachetable.capacity = NBUF;
-    
-}
-
-struct htable bcachetable;
 
 
 
@@ -612,7 +654,18 @@ void shutdown(void){
     shutdownFS();
 }
 
+void init(void) {
+    initFS();
+}
+
+void test(void){
+    
+}
+
 int main() {
    
+   init();
+   test();
+   shutdown();
     return 0;
 }
